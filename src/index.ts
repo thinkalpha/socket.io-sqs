@@ -75,24 +75,26 @@ export class SqsSocketIoAdapter /* extends Adapter */ extends EventEmitter imple
         const createTopicPromise = this.snsClient.createTopic({Name: snsName});
         
         const [topicReply, queue] = await Promise.all([createTopicPromise, this.createQueueForRoom(room)]);
+        /* eslint-disable quotes */
         const newQueueAttrs: any = {
             "Version": "2008-10-17",
             "Id": `${queue.arn}/SQSDefaultPolicy`,
             "Statement": [{
-              "Sid": "Sid" + new Date().getTime(),
-              "Effect": "Allow",
-              "Principal": {
-                "AWS": "*"
-              },
-              "Action": "SQS:SendMessage",
-              "Resource": queue.arn,
-              "Condition": {
-                "ArnEquals": {
-                  "aws:SourceArn": topicReply.TopicArn!
+                "Sid": "Sid" + new Date().getTime(),
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": "*"
+                },
+                "Action": "SQS:SendMessage",
+                "Resource": queue.arn,
+                "Condition": {
+                    "ArnEquals": {
+                        "aws:SourceArn": topicReply.TopicArn!
+                    }
                 }
-              }
             }]
         };
+        /* eslint-enable quotes */
         await Promise.all([
             this.sqsClient.setQueueAttributes({QueueUrl: queue.url, Attributes: newQueueAttrs}),
             this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn})

@@ -1,0 +1,2 @@
+import {SqsSocketIoAdapter} from '.';
+
