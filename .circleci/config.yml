@@ -34,6 +34,7 @@ jobs:
           name: Test
           command: npx jest --ci --runInBand --reporters=default --reporters=jest-junit
           environment:
+            DEBUG: socket.io-client:* socket.io:* engine:* socket.io-sqs:* socket.io-sqs
             JEST_JUNIT_OUTPUT_DIR: "reports/junit/js-test-results.xml"
       - store_test_results:
           path: reports/junit/js-test-results.xml
