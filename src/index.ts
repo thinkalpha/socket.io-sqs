@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import {BroadcastOptions, Room, SocketId} from 'socket.io-adapter';
 import {SNS, SNSClient, SNSClientConfig} from '@aws-sdk/client-sns';
 import {SQS, SQSClient, SQSClientConfig} from '@aws-sdk/client-sqs';
@@ -7,6 +8,7 @@ import asyncLock from 'async-lock';
 import { Message } from '@aws-sdk/client-sqs/types/models';
 import {mapIter} from './util';
 import { CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
+import AbortController from 'node-abort-controller';
 
 export interface SqsSocketIoAdapterOptions {
     roomSqsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
@@ -126,7 +128,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                 QueueUrl: createQueueReply.QueueUrl,
                 AttributeNames: ['QueueArn']
             });
-            console.debug(createQueueReply.QueueUrl);
+            console.debug('queue url', createQueueReply.QueueUrl, 'queue arn', attrs.Attributes!['QueueArn']);
             return {
                 arn: attrs.Attributes!['QueueArn'],
                 url: createQueueReply.QueueUrl!
@@ -138,12 +140,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
             const topicReply = await this.snsClient.createTopic({Name: snsName});
             
             const queue = await this.createQueueForRoom(room, topicReply);
-            // const newQueueAttrs: any = ;
-            /* eslint-enable quotes */
-            await Promise.all([
-                // this.sqsClient.setQueueAttributes({QueueUrl: queue.url, Attributes: newQueueAttrs}),
-                this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn})
-            ]);
+            await this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn});
             return {
                 queueUrl: queue.url
             };
@@ -165,25 +162,37 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
         }
 
         private createRoomListener(room: string, queueUrl: string): () => void {
-            let run = true;
+            const abortController = new AbortController();
 
             (async () => {
-                while (run) {
-                    const res = await this.sqsClient.receiveMessage({
-                        QueueUrl: queueUrl,
-                        MaxNumberOfMessages: 10, // 10 is max
-                        WaitTimeSeconds: 20 // 20 is max
-                    });
-                    if (!res.Messages) continue;
-                    for (const message of res.Messages) {
-                        this.handleMessage(message, room);
+                while (!abortController.signal.aborted) {
+                    try {
+                        const res = await this.sqsClient.receiveMessage({
+                            QueueUrl: queueUrl,
+                            MaxNumberOfMessages: 10, // 10 is max
+                            WaitTimeSeconds: 20 // 20 is max
+                        }, {
+                            abortSignal: abortController.signal as any
+                        });
+                        if (!res.Messages) continue;
+                        for (const message of res.Messages) {
+                            this.handleMessage(message, room);
+                        }
+                    } catch (e) {
+                        if (e.name !== 'AbortError') {
+                            console.warn('Failed to retrieve messages for room', room, e);
+                        }
                     }
                 }
             })();
 
-            return () => {
-                run = false;
-                this.sqsClient.deleteQueue({QueueUrl: queueUrl});
+            return async () => {
+                abortController.abort();
+                try {
+                    this.sqsClient.deleteQueue({QueueUrl: queueUrl});
+                } catch (e) {
+                    console.warn('Failed to delete queue for room', room, e);
+                }
             };
         }
 
