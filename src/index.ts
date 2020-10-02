@@ -5,6 +5,8 @@ import {Namespace, Adapter, Room as FormalRoom} from 'socket.io';
 import { EventEmitter } from 'events';
 import asyncLock from 'async-lock';
 import { Message } from '@aws-sdk/client-sqs/types/models';
+import {mapIter} from './util';
+import { CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
 
 export interface SqsSocketIoAdapterOptions {
     roomSqsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
@@ -13,6 +15,7 @@ export interface SqsSocketIoAdapterOptions {
     defaultSnsName: string;
     snsClient: SNS | SNSClientConfig;
     sqsClient: SQS | SQSClientConfig;
+    region: string;
     accountId: string;
 }
 
@@ -94,10 +97,36 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
             }
         }
 
-        private async createQueueForRoom(room: string): Promise<{arn: string, url: string}> {
+        private async createQueueForRoom(room: string, topicReply: CreateTopicResponse): Promise<{arn: string, url: string}> {
             const sqsName = this.getRoomSqsName(room);
-            const createQueueReply = await this.sqsClient.createQueue({QueueName: sqsName});
-            const attrs = await this.sqsClient.getQueueAttributes({QueueUrl: createQueueReply.QueueUrl, AttributeNames: ['QueueArn']});
+            /* eslint-disable quotes */
+            const policy = JSON.stringify({
+                "Version": "2012-10-17",
+                "Id": "__default_policy_ID",
+                "Statement": [
+                    {
+                        "Sid": "__owner_statement", // "Sid" + new Date().getTime(),
+                        "Effect": "Allow",
+                        "Principal": "*",
+                        "Action": "SQS:SendMessage",
+                        "Condition": {
+                            "ArnEquals": {
+                                "aws:SourceArn": topicReply.TopicArn!
+                            }
+                        }
+                    }
+                ]
+            });
+            /* eslint-enable quotes */
+            const createQueueReply = await this.sqsClient.createQueue({
+                QueueName: sqsName,
+                Attributes: {Policy: policy}
+            });
+            const attrs = await this.sqsClient.getQueueAttributes({
+                QueueUrl: createQueueReply.QueueUrl,
+                AttributeNames: ['QueueArn']
+            });
+            console.debug(createQueueReply.QueueUrl);
             return {
                 arn: attrs.Attributes!['QueueArn'],
                 url: createQueueReply.QueueUrl!
@@ -106,31 +135,13 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
 
         private async createRoomSnsAndSqs(room: string): Promise<{queueUrl: string}> {
             const snsName = this.getRoomSnsName(room);
-            const createTopicPromise = this.snsClient.createTopic({Name: snsName});
+            const topicReply = await this.snsClient.createTopic({Name: snsName});
             
-            const [topicReply, queue] = await Promise.all([createTopicPromise, this.createQueueForRoom(room)]);
-            /* eslint-disable quotes */
-            const newQueueAttrs: any = {
-                "Version": "2008-10-17",
-                "Id": `${queue.arn}/SQSDefaultPolicy`,
-                "Statement": [{
-                    "Sid": "Sid" + new Date().getTime(),
-                    "Effect": "Allow",
-                    "Principal": {
-                        "AWS": "*"
-                    },
-                    "Action": "SQS:SendMessage",
-                    "Resource": queue.arn,
-                    "Condition": {
-                        "ArnEquals": {
-                            "aws:SourceArn": topicReply.TopicArn!
-                        }
-                    }
-                }]
-            };
+            const queue = await this.createQueueForRoom(room, topicReply);
+            // const newQueueAttrs: any = ;
             /* eslint-enable quotes */
             await Promise.all([
-                this.sqsClient.setQueueAttributes({QueueUrl: queue.url, Attributes: newQueueAttrs}),
+                // this.sqsClient.setQueueAttributes({QueueUrl: queue.url, Attributes: newQueueAttrs}),
                 this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn})
             ]);
             return {
@@ -160,8 +171,8 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                 while (run) {
                     const res = await this.sqsClient.receiveMessage({
                         QueueUrl: queueUrl,
-                        MaxNumberOfMessages: 10,
-                        WaitTimeSeconds: 100
+                        MaxNumberOfMessages: 10, // 10 is max
+                        WaitTimeSeconds: 20 // 20 is max
                     });
                     if (!res.Messages) continue;
                     for (const message of res.Messages) {
@@ -176,29 +187,34 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
             };
         }
 
-        addAll(id: string, rooms: Set<string>): void {
-            const newRooms = new Set<string>();
-            for (const room of rooms) {
-                if (!this._sids.has(id)) {
-                    this._sids.set(id, new Set());
+        addAll(id: string, rooms: string[], callback?: () => void): void {
+            // eslint-disable-next-line prefer-rest-params
+            console.debug('addAll', ...arguments);
+            
+            (async () => {
+                const newRooms = new Set<string>();
+                for (const room of rooms) {
+                    if (!this._sids.has(id)) {
+                        this._sids.set(id, new Set());
+                    }
+                    this._sids.get(id)!.add(room);
+            
+                    if (!this._rooms.has(room)) {
+                        this._rooms.set(room, new Set());
+                        newRooms.add(room);
+                    }
+                    this._rooms.get(room)!.add(id);
                 }
-                this._sids.get(id)!.add(room);
-        
-                if (!this._rooms.has(room)) {
-                    this._rooms.set(room, new Set());
-                    newRooms.add(room);
-                }
-                this._rooms.get(room)!.add(id);
-            }
 
-            newRooms.forEach(async room => {
-                const {queueUrl} = await this.createRoomSnsAndSqs(room);
-                const unsub = this.createRoomListener(room, queueUrl);
-                this.roomListeners.set(room, unsub);
-            });
+                await Promise.all([...mapIter(newRooms, async room => {
+                    const {queueUrl} = await this.createRoomSnsAndSqs(room);
+                    const unsub = this.createRoomListener(room, queueUrl);
+                    this.roomListeners.set(room, unsub);
+                })]);
+            })().then(callback);
         }
         
-        del(id: string, room: string): void {
+        del(id: string, room: string, callback?: () => void): void {
             if (this._sids.has(id)) {
                 this._sids.get(id)!.delete(room);
             }
@@ -213,36 +229,48 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                     this.roomListeners.delete(room);
                 }
             }
+
+            callback?.();
         }
-        delAll(id: string): void {
+        delAll(id: string, callback?: () => void): void {
             if (!this._sids.has(id)) {
                 return;
             }
         
             for (const room of this._sids.get(id)!) {
-                this.del(id, room);
+                this.del(id, room); // todo: probably wrap this via promises
             }
         
             this._sids.delete(id);
+
+            callback?.();
         }
 
         private constructTopicArn(topic: string) {
-            const arn = `arn:aws:sns:${this.snsClient.config.region}:${options.accountId}:${topic}`;
+            const arn = `arn:aws:sns:${options.region}:${options.accountId}:${topic}`;
             return arn;
         }
 
-        broadcast(packet: any, opts: BroadcastOptions): void {
+        broadcast(packet: any, opts: BroadcastOptions, callback?: () => void): void {
+            console.debug('broadcast', packet, opts);
             if (!opts.flags?.local) {
                 const envelope: Envelope = {
                     packet,
                     except: opts.except && [...opts.except]
                 };
-                opts.rooms.forEach(room => 
-                    this.snsClient.publish({
-                        TopicArn: this.constructTopicArn(this.getRoomSnsName(room)),
-                        Message: JSON.stringify(envelope)
-                    })
-                );
+                (async () => {
+                    await Promise.all([...mapIter(opts.rooms, async room => {
+                        try {
+                            await this.snsClient.publish({
+                                TopicArn: this.constructTopicArn(this.getRoomSnsName(room)),
+                                Message: JSON.stringify(envelope)
+                            });
+                        } catch (e) {
+                            if (e.Code !== 'NotFound') throw e;
+                            console.debug('room does not exist but tried to send to it', room);
+                        }
+                    })]);
+                })().then(callback);
             } else {
                 const rooms = opts.rooms;
                 const except = opts.except ?? new Set();
@@ -277,6 +305,8 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                         if (socket) socket.packet(packet, packetOpts);
                     }
                 }
+
+                callback?.();
             }
         }
         sockets(rooms: Set<Room>): Promise<Set<SocketId>> {
@@ -300,6 +330,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
 
             return Promise.resolve(sids);
         }
+
         socketRooms(id: string): Set<Room> | undefined {
             return this._sids.get(id);
         }
