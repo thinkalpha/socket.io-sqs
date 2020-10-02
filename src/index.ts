@@ -9,6 +9,9 @@ import { Message } from '@aws-sdk/client-sqs/types/models';
 import {mapIter} from './util';
 import { CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
 import AbortController from 'node-abort-controller';
+import debugFactory from 'debug';
+
+const debug = debugFactory('socket.io-sqs');
 
 export interface SqsSocketIoAdapterOptions {
     roomSqsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
@@ -101,6 +104,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
 
         private async createQueueForRoom(room: string, topicReply: CreateTopicResponse): Promise<{arn: string, url: string}> {
             const sqsName = this.getRoomSqsName(room);
+            const sqsArn = this.constructQueueArn(sqsName);
             /* eslint-disable quotes */
             const policy = JSON.stringify({
                 "Version": "2012-10-17",
@@ -111,6 +115,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                         "Effect": "Allow",
                         "Principal": "*",
                         "Action": "SQS:SendMessage",
+                        "Resource": sqsArn,
                         "Condition": {
                             "ArnEquals": {
                                 "aws:SourceArn": topicReply.TopicArn!
@@ -128,21 +133,22 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                 QueueUrl: createQueueReply.QueueUrl,
                 AttributeNames: ['QueueArn']
             });
-            console.debug('queue url', createQueueReply.QueueUrl, 'queue arn', attrs.Attributes!['QueueArn']);
+            debug('queue url', createQueueReply.QueueUrl, 'queue arn', attrs.Attributes!['QueueArn']);
             return {
                 arn: attrs.Attributes!['QueueArn'],
                 url: createQueueReply.QueueUrl!
             };
         }
 
-        private async createRoomSnsAndSqs(room: string): Promise<{queueUrl: string}> {
+        private async createRoomSnsAndSqs(room: string): Promise<{queueUrl: string, subscriptionArn: string}> {
             const snsName = this.getRoomSnsName(room);
             const topicReply = await this.snsClient.createTopic({Name: snsName});
             
             const queue = await this.createQueueForRoom(room, topicReply);
-            await this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn});
+            const subscription = await this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn});
             return {
-                queueUrl: queue.url
+                queueUrl: queue.url,
+                subscriptionArn: subscription.SubscriptionArn!
             };
         }
 
@@ -161,19 +167,21 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
             }
         }
 
-        private createRoomListener(room: string, queueUrl: string): () => void {
+        private createRoomListener(room: string, queueUrl: string, subscriptionArn: string): () => void {
             const abortController = new AbortController();
 
             (async () => {
+                debug('Starting room listener for', room);
                 while (!abortController.signal.aborted) {
                     try {
                         const res = await this.sqsClient.receiveMessage({
                             QueueUrl: queueUrl,
                             MaxNumberOfMessages: 10, // 10 is max
-                            WaitTimeSeconds: 20 // 20 is max
+                            WaitTimeSeconds: 1 // 20 is max
                         }, {
                             abortSignal: abortController.signal as any
                         });
+                        debug('Got', res.Messages?.length ?? 0, 'messages for room', room);
                         if (!res.Messages) continue;
                         for (const message of res.Messages) {
                             this.handleMessage(message, room);
@@ -188,17 +196,20 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
 
             return async () => {
                 abortController.abort();
-                try {
-                    this.sqsClient.deleteQueue({QueueUrl: queueUrl});
-                } catch (e) {
-                    console.warn('Failed to delete queue for room', room, e);
-                }
+                await Promise.all([
+                    this.sqsClient.deleteQueue({QueueUrl: queueUrl})
+                        .then(() => debug('Deleted queue for room', room))
+                        .catch(err => console.warn('Failed to delete queue for room', room, err)),
+                    this.snsClient.unsubscribe({SubscriptionArn: subscriptionArn})
+                        .then(() => debug('Deleted subscription for room', room))
+                        .catch(err => console.warn('Failed to unsubscribe queue for room', room, 'w/ subscription arn', subscriptionArn, err)),
+                ]);
             };
         }
 
         addAll(id: string, rooms: string[], callback?: () => void): void {
             // eslint-disable-next-line prefer-rest-params
-            console.debug('addAll', ...arguments);
+            debug('addAll', ...arguments);
             
             (async () => {
                 const newRooms = new Set<string>();
@@ -216,8 +227,8 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                 }
 
                 await Promise.all([...mapIter(newRooms, async room => {
-                    const {queueUrl} = await this.createRoomSnsAndSqs(room);
-                    const unsub = this.createRoomListener(room, queueUrl);
+                    const {queueUrl, subscriptionArn} = await this.createRoomSnsAndSqs(room);
+                    const unsub = this.createRoomListener(room, queueUrl, subscriptionArn);
                     this.roomListeners.set(room, unsub);
                 })]);
             })().then(callback);
@@ -260,8 +271,13 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
             return arn;
         }
 
+        private constructQueueArn(queueName: string) {
+            const arn = `arn:aws:sqs:${options.region}:${options.accountId}:${queueName}`;
+            return arn;
+        }
+
         broadcast(packet: any, opts: BroadcastOptions, callback?: () => void): void {
-            console.debug('broadcast', packet, opts);
+            debug('broadcast', packet, opts);
             if (!opts.flags?.local) {
                 const envelope: Envelope = {
                     packet,
@@ -270,13 +286,16 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                 (async () => {
                     await Promise.all([...mapIter(opts.rooms, async room => {
                         try {
+                            const arn = this.constructTopicArn(this.getRoomSnsName(room));
+                            debug('Publishing message for room', room, 'arn', arn, envelope);
                             await this.snsClient.publish({
-                                TopicArn: this.constructTopicArn(this.getRoomSnsName(room)),
+                                TopicArn: arn,
                                 Message: JSON.stringify(envelope)
                             });
+                            debug('Published message for room', room, 'arn', arn,envelope);
                         } catch (e) {
                             if (e.Code !== 'NotFound') throw e;
-                            console.debug('room does not exist but tried to send to it', room);
+                            console.warn('Room does not exist but tried to send to it', room);
                         }
                     })]);
                 })().then(callback);

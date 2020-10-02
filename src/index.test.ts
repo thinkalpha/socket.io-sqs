@@ -32,12 +32,12 @@ afterEach(async () => {
 
 it('should forward a basic message', async () => {
     socket = io(12345, {adapter: SqsSocketIoAdapter(options) as any});
-    socket.on('connect', clientsock => {
+    socket.on('connect', async clientsock => {
         // console.info('connection', clientsock);
-        clientsock.join('newroom');
+        await new Promise((res, rej) => clientsock.join('newroom', err => err ? rej(err) : res()));
+        socket.to('newroom').emit('testevent', 'asdf');
     });
     client = ioclient('http://localhost:12345', {autoConnect: true, transports: ['websocket']});
     const promise = new Promise((res, rej) => client.on('testevent', (value: string) => res(value)));
-    socket.to('newroom').emit('testevent', 'asdf');
     await promise;
 });
