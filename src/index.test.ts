@@ -1,17 +1,21 @@
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+require('source-map-support').install();
+
 import {SqsSocketIoAdapter, SqsSocketIoAdapterOptions} from '.';
 import io from 'socket.io';
 import ioclient from 'socket.io-client';
 import { createServer } from 'http';
 import { randomString } from './util';
 
-const name = randomString();
+const testName = randomString();
+const endpointName = randomString();
 
 const options: SqsSocketIoAdapterOptions = {
     accountId: '723207552760',
-    defaultSnsName: 'socketio-test-',
-    defaultSqsName: `socketio-test-${name}-`,
-    roomSnsNameOrPrefix: 'socketio-test-',
-    roomSqsNameOrPrefix: `socketio-test-${name}-`,
+    defaultSnsName: `socketio-test-${testName}-`,
+    defaultSqsName: `socketio-test-${testName}-${endpointName}-`,
+    roomSnsNameOrPrefix: `socketio-test-${testName}-`,
+    roomSqsNameOrPrefix: `socketio-test-${testName}-${endpointName}-`,
     snsClient: {
         region: 'us-east-1', 
     },

@@ -292,7 +292,6 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                                 TopicArn: arn,
                                 Message: JSON.stringify(envelope)
                             });
-                            debug('Published message for room', room, 'arn', arn,envelope);
                         } catch (e) {
                             if (e.Code !== 'NotFound') throw e;
                             console.warn('Room does not exist but tried to send to it', room);
