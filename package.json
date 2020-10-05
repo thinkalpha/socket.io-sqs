@@ -31,7 +31,7 @@
     "@typescript-eslint/parser": "^4.3.0",
     "eslint": "^7.10.0",
     "get-port": "^5.1.1",
-    "jest": "^26.4.2",
+    "jest": "^26.5.0",
     "jest-junit": "^11.1.0",
     "socket.io": "^2.3.0",
     "socket.io-client": "^2.3.1",
