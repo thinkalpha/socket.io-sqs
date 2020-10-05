@@ -42,7 +42,7 @@
     "@aws-sdk/client-sqs": "^1.0.0-gamma.10",
     "@aws-sdk/node-config-provider": "^1.0.0-gamma.1",
     "async-lock": "^1.2.4",
-    "aws-sdk": "^2.764.0",
+    "aws-sdk": "^2.766.0",
     "debug": "^4.2.0",
     "node-abort-controller": "^1.1.0",
     "socket.io-adapter": "^2.0.2"
