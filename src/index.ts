@@ -290,7 +290,10 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                             debug('Publishing message for room', room, 'arn', arn, envelope);
                             await this.snsClient.publish({
                                 TopicArn: arn,
-                                Message: JSON.stringify(envelope)
+                                Message: JSON.stringify(envelope),
+                                MessageAttributes: {
+                                    ['test']: {DataType: 'String', StringValue: 'asdf'}
+                                }
                             });
                         } catch (e) {
                             if (e.Code !== 'NotFound') throw e;
