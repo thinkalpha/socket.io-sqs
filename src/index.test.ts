@@ -19,7 +19,7 @@ const options: SqsSocketIoAdapterOptions = {
     roomSnsNameOrPrefix: `socketio-test-${testName}-`,
     roomSqsNameOrPrefix: `socketio-test-${testName}-${endpointName}-`,
     snsClient: {
-        region: 'us-east-1', 
+        region: 'us-east-1',
     },
     sqsClient: {region: 'us-east-1'},
     region: 'us-east-1'

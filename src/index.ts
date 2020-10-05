@@ -174,20 +174,32 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                 debug('Starting room listener for', room);
                 while (!abortController.signal.aborted) {
                     try {
+                        debug('Retrieving messages for room', room);
                         const res = await this.sqsClient.receiveMessage({
                             QueueUrl: queueUrl,
                             MaxNumberOfMessages: 10, // 10 is max
-                            WaitTimeSeconds: 1 // 20 is max
+                            WaitTimeSeconds: 5, // 20 is max
+                            VisibilityTimeout: 1,
+                            MessageAttributeNames: [
+                                'All'
+                            ],
+                            AttributeNames: [
+                                'SentTimestamp'
+                            ],
                         }, {
                             abortSignal: abortController.signal as any
                         });
                         debug('Got', res.Messages?.length ?? 0, 'messages for room', room);
                         if (!res.Messages) continue;
-                        for (const message of res.Messages) {
+                        await Promise.all(res.Messages.map(message => {
                             this.handleMessage(message, room);
-                        }
+                            return this.sqsClient.deleteMessage({
+                                QueueUrl: queueUrl,
+                                ReceiptHandle: message.ReceiptHandle
+                            });
+                        }));
                     } catch (e) {
-                        if (e.name !== 'AbortError') {
+                        if (e.name !== 'AbortError' && e.code !== 'ECONNRESET') {
                             console.warn('Failed to retrieve messages for room', room, e);
                         }
                     }
@@ -293,7 +305,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
                                 Message: JSON.stringify(envelope),
                                 MessageAttributes: {
                                     ['test']: {DataType: 'String', StringValue: 'asdf'}
-                                }
+                                },
                             });
                         } catch (e) {
                             if (e.Code !== 'NotFound') throw e;
