@@ -145,7 +145,7 @@ export function SqsSocketIoAdapter(options: SqsSocketIoAdapterOptions) {
             const topicReply = await this.snsClient.createTopic({Name: snsName});
             
             const queue = await this.createQueueForRoom(room, topicReply);
-            const subscription = await this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn});
+            const subscription = await this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn, Attributes: {'RawMessageDelivery': 'true'}});
             return {
                 queueUrl: queue.url,
                 subscriptionArn: subscription.SubscriptionArn!
