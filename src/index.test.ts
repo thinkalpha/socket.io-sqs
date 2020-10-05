@@ -88,3 +88,22 @@ it('should forward a direct-to-sid message', async () => {
     const res = await promise;
     expect(res).toBe('asdf');
 });
+
+// todo: this needs to be implemented
+// it('should forward a binary message', async () => {
+//     const port = await getPort({});
+//     socket = io(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
+//     const sourceArr = [1, 234, -19];
+//     const payload = {
+//         stringPart: 'asdf',
+//         binaryPart: new Uint16Array(sourceArr)
+//     };
+//     socket.on('connect', async clientsock => {
+//         socket.emit('testbinevent', payload);
+//     });
+//     await readyPromise;
+//     client = ioclient(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
+//     const promise = new Promise((res, rej) => client.on('testbinevent', (value: string) => res(value)));
+//     const res = await promise;
+//     expect(res).toEqual(payload);
+// });
