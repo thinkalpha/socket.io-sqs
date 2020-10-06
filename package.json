@@ -2,8 +2,8 @@
   "name": "socket.io-sqs",
   "version": "0.0.2-dev.2",
   "description": "A socket.io adapter for SQS/SNS",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "scripts": {
     "test": "npx jest --coverage --forceExit",
     "lint": "npx eslint . --ext .ts --cache",

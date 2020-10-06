@@ -44,7 +44,7 @@ type OmitFirstArg<F> = F extends (x: any, ...args: infer P) => infer R ? (...arg
 const nullSet = new Set<null>([null]);
 Object.freeze(nullSet);
 
-export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions) {
+export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): Adapter {
     return class SqsSocketIoAdapterClass /* extends EventEmitter implements Adapter */ {
         private _rooms: Map<Room, Set<SocketId>> = new Map();
         private _sids: Map<SocketId, Set<Room>> = new Map();
@@ -225,7 +225,7 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions) {
 
             return async () => {
                 if (abortController.signal.aborted) return;
-                
+
                 abortController.abort();
                 await Promise.all([
                     this.sqsClient.deleteQueue({QueueUrl: queueUrl})
@@ -397,7 +397,7 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions) {
         socketRooms(id: string): Set<Room> | undefined {
             return this._sids.get(id);
         }
-    };
+    } as any as Adapter;
 }
 
 export default SqsSocketIoAdapterFactory;
