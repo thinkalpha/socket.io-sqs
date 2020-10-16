@@ -5,7 +5,7 @@ import {SQS, SQSClient, SQSClientConfig} from '@aws-sdk/client-sqs';
 import {Namespace, Adapter, Room as FormalRoom} from 'socket.io';
 import { EventEmitter } from 'events';
 import asyncLock from 'async-lock';
-import { Message } from '@aws-sdk/client-sqs/types/models';
+import { Message, CreateQueueRequest } from '@aws-sdk/client-sqs/types/models';
 import {mapIter} from './util';
 import { CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
 import AbortController from 'node-abort-controller';
@@ -18,6 +18,7 @@ export interface SqsSocketIoAdapterOptions {
     roomSnsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
     defaultSqsName?: string;
     defaultSnsName?: string;
+    queueTags?: CreateQueueRequest['tags'];
     snsClient: SNS | SNSClientConfig;
     sqsClient: SQS | SQSClientConfig;
     region: string;
@@ -144,7 +145,14 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             /* eslint-enable quotes */
             const createQueueReply = await this.sqsClient.createQueue({
                 QueueName: sqsName,
-                Attributes: {Policy: policy}
+                tags: {
+                    ...options.queueTags,
+                    ...(room ? {room, default: false} : {default: true})
+                },
+                Attributes: {
+                    Policy: policy,
+
+                }
             });
             const attrs = await this.sqsClient.getQueueAttributes({
                 QueueUrl: createQueueReply.QueueUrl,
