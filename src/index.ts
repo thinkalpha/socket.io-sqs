@@ -147,7 +147,7 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                 QueueName: sqsName,
                 tags: {
                     ...options.queueTags,
-                    ...(room ? {room, default: false} : {default: true})
+                    ...(room ? {room, default: 'false'} : {default: 'true'})
                 },
                 Attributes: {
                     Policy: policy,
