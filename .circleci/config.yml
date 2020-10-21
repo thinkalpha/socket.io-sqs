@@ -90,9 +90,11 @@ workflows:
       - deploy:
           requires:
             - build
-          # filters:
+          filters:
             # tags:
             #   only: /^v.*/
-            # branches:
+            branches:
               # ignore: /.*/
-              # only: master
+              only:
+                - master
+                - dev
