@@ -1,13 +1,13 @@
 /* eslint-disable no-console */
 import {BroadcastOptions, Room, SocketId} from 'socket.io-adapter';
-import {SNS, SNSClient, SNSClientConfig} from '@aws-sdk/client-sns';
+import {CreateTopicCommand, SNS, SNSClient, SNSClientConfig} from '@aws-sdk/client-sns';
 import {SQS, SQSClient, SQSClientConfig} from '@aws-sdk/client-sqs';
 import {Namespace, Adapter, Room as FormalRoom} from 'socket.io';
 import { EventEmitter } from 'events';
 import asyncLock from 'async-lock';
 import { Message, CreateQueueRequest } from '@aws-sdk/client-sqs/types/models';
 import {mapIter} from './util';
-import { CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
+import { CreateTopicInput, CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
 import AbortController from 'node-abort-controller';
 import debugFactory from 'debug';
 
@@ -19,6 +19,7 @@ export interface SqsSocketIoAdapterOptions {
     defaultSqsName?: string;
     defaultSnsName?: string;
     queueTags?: CreateQueueRequest['tags'];
+    topicTags?: CreateTopicInput['Tags'];
     snsClient: SNS | SNSClientConfig;
     sqsClient: SQS | SQSClientConfig;
     region: string;
@@ -167,7 +168,10 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
 
         private async createRoomSnsAndSqs(room: string | null): Promise<{queueUrl: string, subscriptionArn: string}> {
             const snsName = this.getRoomSnsName(room);
-            const topicReply = await this.snsClient.createTopic({Name: snsName});
+            const topicReply = await this.snsClient.createTopic({
+                Name: snsName,
+                Tags: options.topicTags
+            });
             
             const queue = await this.createQueueForRoom(room, topicReply);
             const subscription = await this.snsClient.subscribe({TopicArn: topicReply.TopicArn, Protocol: 'sqs', Endpoint: queue.arn, Attributes: {'RawMessageDelivery': 'true'}});
@@ -380,7 +384,7 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                 callback?.();
             }
         }
-        sockets(rooms: Set<Room>): Promise<Set<SocketId>> {
+        sockets(rooms: Set<Room>, callback?: (sockets: Set<SocketId>) => void): Promise<Set<SocketId>> {
             const sids = new Set<SocketId>();
 
             if (rooms.size) {
@@ -399,6 +403,7 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                 }
             }
 
+            callback?.(sids);
             return Promise.resolve(sids);
         }
 
