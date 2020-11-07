@@ -24,6 +24,7 @@ export interface SqsSocketIoAdapterOptions {
     sqsClient: SQS | SQSClientConfig;
     region: string;
     accountId: string;
+    banSidRooms?: boolean;
     
     shutdownCallbackCallback?: (callback: () => Promise<void>) => void;
     readyCallback?: () => void;
@@ -257,6 +258,7 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             (async () => {
                 const newRooms = new Set<string>();
                 for (const room of rooms) {
+                    if (room === id && options.banSidRooms) continue;
                     if (!this._sids.has(id)) {
                         this._sids.set(id, new Set());
                     }
