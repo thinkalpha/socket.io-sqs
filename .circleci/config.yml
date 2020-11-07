@@ -6,7 +6,7 @@ defaults: &defaults
     - image: circleci/node:13
 
 jobs:
-  build:
+  lint:
     <<: *defaults
     steps:
       - checkout
@@ -25,11 +25,46 @@ jobs:
       - run:
           name: Lint
           command: npm run lint
+  build:
+    <<: *defaults
+    steps:
+      - checkout
+      - run:
+          name: Authenticate with registry
+          command: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/repo/.npmrc
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package.json" }}
+      - run:
+          name: npm install
+          command: npm ci
+      - save_cache:
+          key: dependency-cache-{{ checksum "package.json" }}
+          paths:
+            - node_modules
       - run:
           name: Compile
           command: |
             npm run build
-            # npm run build:cjs
+      - persist_to_workspace:
+          root: ~/repo
+          paths:
+            - .
+  test:
+    <<: *defaults
+    steps:
+      - checkout
+      - run:
+          name: Authenticate with registry
+          command: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/repo/.npmrc
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package.json" }}
+      - run:
+          name: npm install
+          command: npm ci
+      - save_cache:
+          key: dependency-cache-{{ checksum "package.json" }}
+          paths:
+            - node_modules
       - run:
           name: Test
           command: npx jest --ci --forceExit --runInBand --reporters=default --reporters=jest-junit
@@ -38,10 +73,6 @@ jobs:
             JEST_JUNIT_OUTPUT_DIR: "reports/junit/js-test-results.xml"
       - store_test_results:
           path: reports/junit/js-test-results.xml
-      - persist_to_workspace:
-          root: ~/repo
-          paths:
-            - .
   deploy:
     <<: *defaults  
     steps:
@@ -81,6 +112,8 @@ workflows:
   build_and_deploy:
     jobs:
       - build
+      - test
+      - lint
       # - test:
       #     requires:
       #       - build
@@ -90,6 +123,8 @@ workflows:
       - deploy:
           requires:
             - build
+            # - test
+            - lint
           filters:
             # tags:
             #   only: /^v.*/
