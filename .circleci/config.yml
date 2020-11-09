@@ -122,9 +122,9 @@ workflows:
       #         only: master
       - deploy:
           requires:
-            - build
-            # - test
             - lint
+            - build
+            - test
           filters:
             # tags:
             #   only: /^v.*/

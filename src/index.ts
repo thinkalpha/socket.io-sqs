@@ -13,6 +13,12 @@ import debugFactory from 'debug';
 
 const debug = debugFactory('socket.io-sqs');
 
+export enum SidRoomRouting {
+    normal = 'normal',
+    local = 'local',
+    banned = 'banned'
+}
+
 export interface SqsSocketIoAdapterOptions {
     roomSqsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
     roomSnsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
@@ -24,7 +30,7 @@ export interface SqsSocketIoAdapterOptions {
     sqsClient: SQS | SQSClientConfig;
     region: string;
     accountId: string;
-    banSidRooms?: boolean;
+    sidRoomRouting?: SidRoomRouting;
     
     shutdownCallbackCallback?: (callback: () => Promise<void>) => void;
     readyCallback?: () => void;
@@ -82,6 +88,8 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
         }
 
         private roomListeners: Map<Room | null, () => Promise<void>> = new Map();
+
+        private localRouting: Set<string> = new Set();
 
         private readonly snsClient: SNS;
         private readonly sqsClient: SQS;
@@ -258,7 +266,13 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             (async () => {
                 const newRooms = new Set<string>();
                 for (const room of rooms) {
-                    if (room === id && options.banSidRooms) continue;
+                    if (room === id) {
+                        if (options.sidRoomRouting === SidRoomRouting.banned) continue;
+                        if (options.sidRoomRouting === SidRoomRouting.local) {
+                            this.localRouting.add(room);
+                            continue;
+                        }
+                    }
                     if (!this._sids.has(id)) {
                         this._sids.set(id, new Set());
                     }
@@ -298,6 +312,8 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             callback?.();
         }
         delAll(id: string, callback?: () => void): void {
+            this.localRouting.delete(id);
+            
             if (!this._sids.has(id)) {
                 return;
             }
@@ -331,20 +347,24 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                 (async () => {
                     const rooms = opts.rooms && opts.rooms.size ? opts.rooms : nullSet;
                     await Promise.all([...mapIter(rooms, async room => {
-                        try {
-                            const snsName = room ? this.getRoomSnsName(room) : (options.defaultSnsName ?? this.getRoomSnsName(''));
-                            const arn = this.constructTopicArn(snsName);
-                            debug('Publishing message for room', room, 'arn', arn, envelope);
-                            await this.snsClient.publish({
-                                TopicArn: arn,
-                                Message: JSON.stringify(envelope),
-                                MessageAttributes: {
-                                    ['test']: {DataType: 'String', StringValue: 'asdf'}
-                                },
-                            });
-                        } catch (e) {
-                            if (e.Code !== 'NotFound') throw e;
-                            console.warn('Room does not exist but tried to send to it', room);
+                        if (this.localRouting.has(room!)) {
+                            await new Promise(res => this.broadcast(packet, {...opts, rooms: new Set([room!]), flags: {...opts.flags, local: true}}, res));
+                        } else {
+                            try {
+                                const snsName = room ? this.getRoomSnsName(room) : (options.defaultSnsName ?? this.getRoomSnsName(''));
+                                const arn = this.constructTopicArn(snsName);
+                                debug('Publishing message for room', room, 'arn', arn, envelope);
+                                await this.snsClient.publish({
+                                    TopicArn: arn,
+                                    Message: JSON.stringify(envelope),
+                                    MessageAttributes: {
+                                        ['test']: {DataType: 'String', StringValue: 'asdf'}
+                                    },
+                                });
+                            } catch (e) {
+                                if (e.Code !== 'NotFound') throw e;
+                                console.warn('Room does not exist but tried to send to it', room);
+                            }
                         }
                     })]);
                 })().then(callback);
