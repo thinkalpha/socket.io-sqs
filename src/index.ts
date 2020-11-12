@@ -1,8 +1,8 @@
 /* eslint-disable no-console */
-import {BroadcastOptions, Room, SocketId} from 'socket.io-adapter';
+import {BroadcastOptions, Room, SocketId, Adapter} from 'socket.io-adapter';
 import {CreateTopicCommand, SNS, SNSClient, SNSClientConfig} from '@aws-sdk/client-sns';
 import {SQS, SQSClient, SQSClientConfig} from '@aws-sdk/client-sqs';
-import {Namespace, Adapter, Room as FormalRoom} from 'socket.io';
+import {Namespace, Socket} from 'socket.io';
 import { EventEmitter } from 'events';
 import asyncLock from 'async-lock';
 import { Message, CreateQueueRequest } from '@aws-sdk/client-sqs/types/models';
@@ -20,8 +20,8 @@ export enum SidRoomRouting {
 }
 
 export interface SqsSocketIoAdapterOptions {
-    roomSqsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
-    roomSnsNameOrPrefix: string | ((room: string, nsp: Namespace) => string);
+    roomSqsNameOrPrefix: string | ((room: Room, nsp: Namespace) => string);
+    roomSnsNameOrPrefix: string | ((room: Room, nsp: Namespace) => string);
     defaultSqsName?: string;
     defaultSnsName?: string;
     queueTags?: CreateQueueRequest['tags'];
@@ -41,11 +41,9 @@ interface Envelope {
     except?: SocketId[];
 }
 
-declare module 'socket.io' {
-    interface Socket {
-        /** see socket.io-adapter source code's broadcast function for where this is used */
-        packet(packet: any, packetOpts: {preEncoded?: boolean, volatile?: boolean, compress?: boolean}): void;
-    }
+interface SocketWithPacketOnly {
+    /** see socket.io-adapter source code's broadcast function for where this is used */
+    packet(packet: any, packetOpts: {preEncoded?: boolean, volatile?: boolean, compress?: boolean}): void;
 }
 
 type OmitFirstArg<F> = F extends (x: any, ...args: infer P) => infer R ? (...args: P) => R : never;
@@ -59,30 +57,25 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
         private _sids: Map<SocketId, Set<Room>> = new Map();
 
         get rooms() {
-            const retval: Adapter['rooms'] = {};
+            const retval: Adapter['rooms'] = new Map();
             this._rooms.forEach((sids, room) => {
-                const sidsMap: FormalRoom['sockets'] = {};
-                let len = 0;
+                const sidsSet: Set<string> = new Set();
                 this._sids.forEach((_, sid) => {
-                    sidsMap[sid] = sids.has(sid);
-                    if (sids.has(sid)) len++;
+                    if (sids.has(sid)) sidsSet.add(sid);
                 });
-                retval[room] = {
-                    sockets: sidsMap,
-                    length: len
-                };
+                retval.set(room, sidsSet);
             });
             return retval;
         }
 
         get sids() {
-            const retval: Adapter['sids'] = {};
+            const retval: Adapter['sids'] = new Map();
             this._sids.forEach((_, sid) => {
-                const roomsMap: Adapter['sids'][''] = {};
+                const roomsSet: Set<Room> = new Set();
                 this._rooms.forEach((sids, room) => {
-                    roomsMap[room] = sids.has(sid);
+                    if (sids.has(sid)) roomsSet.add(room);
                 });
-                retval[sid] = roomsMap;
+                retval.set(sid, roomsSet);
             });
             return retval;
         }
@@ -191,14 +184,14 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
         }
 
         private handleMessage(msg: Message, room: string | null) {
-            const sids = room ? this._rooms.get(room)! : Object.keys(this.nsp.connected);
+            const sids = room ? this._rooms.get(room)! : this.nsp.sockets.keys();
             const envelope: Envelope = JSON.parse(msg.Body!);
             const excepts = new Set(envelope.except);
             const packet = envelope.packet;
             for (const sid of sids) {
                 if (excepts.has(sid)) continue;
 
-                this.nsp.connected[sid]?.packet(packet, {
+                (this.nsp.sockets.get(sid) as unknown as SocketWithPacketOnly)?.packet(packet, {
                     preEncoded: false,
 
                 });
@@ -259,41 +252,39 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             };
         }
 
-        addAll(id: string, rooms: string[], callback?: () => void): void {
+        async addAll(id: string, rooms: string[]): Promise<void> {
             // eslint-disable-next-line prefer-rest-params
             debug('addAll', ...arguments);
             
-            (async () => {
-                const newRooms = new Set<string>();
-                for (const room of rooms) {
-                    if (room === id) {
-                        if (options.sidRoomRouting === SidRoomRouting.banned) continue;
-                        if (options.sidRoomRouting === SidRoomRouting.local) {
-                            this.localRouting.add(room);
-                            continue;
-                        }
+            const newRooms = new Set<string>();
+            for (const room of rooms) {
+                if (room === id) {
+                    if (options.sidRoomRouting === SidRoomRouting.banned) continue;
+                    if (options.sidRoomRouting === SidRoomRouting.local) {
+                        this.localRouting.add(room);
+                        continue;
                     }
-                    if (!this._sids.has(id)) {
-                        this._sids.set(id, new Set());
-                    }
-                    this._sids.get(id)!.add(room);
-            
-                    if (!this._rooms.has(room)) {
-                        this._rooms.set(room, new Set());
-                        newRooms.add(room);
-                    }
-                    this._rooms.get(room)!.add(id);
                 }
+                if (!this._sids.has(id)) {
+                    this._sids.set(id, new Set());
+                }
+                this._sids.get(id)!.add(room);
+        
+                if (!this._rooms.has(room)) {
+                    this._rooms.set(room, new Set());
+                    newRooms.add(room);
+                }
+                this._rooms.get(room)!.add(id);
+            }
 
-                await Promise.all([...mapIter(newRooms, async room => {
-                    const {queueUrl, subscriptionArn} = await this.createRoomSnsAndSqs(room);
-                    const unsub = this.createRoomListener(room, queueUrl, subscriptionArn);
-                    this.roomListeners.set(room, unsub);
-                })]);
-            })().then(callback);
+            await Promise.all([...mapIter(newRooms, async room => {
+                const {queueUrl, subscriptionArn} = await this.createRoomSnsAndSqs(room);
+                const unsub = this.createRoomListener(room, queueUrl, subscriptionArn);
+                this.roomListeners.set(room, unsub);
+            })]);
         }
         
-        del(id: string, room: string, callback?: () => void): void {
+        del(id: string, room: string): void {
             if (this._sids.has(id)) {
                 this._sids.get(id)!.delete(room);
             }
@@ -308,10 +299,8 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                     this.roomListeners.delete(room);
                 }
             }
-
-            callback?.();
         }
-        delAll(id: string, callback?: () => void): void {
+        delAll(id: string): void {
             this.localRouting.delete(id);
             
             if (!this._sids.has(id)) {
@@ -323,8 +312,6 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             }
         
             this._sids.delete(id);
-
-            callback?.();
         }
 
         private constructTopicArn(topic: string) {
@@ -337,37 +324,35 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
             return arn;
         }
 
-        broadcast(packet: any, opts: BroadcastOptions, callback?: () => void): void {
+        async broadcast(packet: any, opts: BroadcastOptions): Promise<void> {
             debug('broadcast', packet, opts);
             if (!opts.flags?.local) {
                 const envelope: Envelope = {
                     packet,
                     except: opts.except && [...opts.except]
                 };
-                (async () => {
-                    const rooms = opts.rooms && opts.rooms.size ? opts.rooms : nullSet;
-                    await Promise.all([...mapIter(rooms, async room => {
-                        if (this.localRouting.has(room!)) {
-                            await new Promise(res => this.broadcast(packet, {...opts, rooms: new Set([room!]), flags: {...opts.flags, local: true}}, res));
-                        } else {
-                            try {
-                                const snsName = room ? this.getRoomSnsName(room) : (options.defaultSnsName ?? this.getRoomSnsName(''));
-                                const arn = this.constructTopicArn(snsName);
-                                debug('Publishing message for room', room, 'arn', arn, envelope);
-                                await this.snsClient.publish({
-                                    TopicArn: arn,
-                                    Message: JSON.stringify(envelope),
-                                    MessageAttributes: {
-                                        ['test']: {DataType: 'String', StringValue: 'asdf'}
-                                    },
-                                });
-                            } catch (e) {
-                                if (e.Code !== 'NotFound') throw e;
-                                console.warn('Room does not exist but tried to send to it', room);
-                            }
+                const rooms = opts.rooms && opts.rooms.size ? opts.rooms : nullSet;
+                await Promise.all([...mapIter(rooms, async room => {
+                    if (this.localRouting.has(room!)) {
+                        await this.broadcast(packet, {...opts, rooms: new Set([room!]), flags: {...opts.flags, local: true}});
+                    } else {
+                        try {
+                            const snsName = room ? this.getRoomSnsName(room) : (options.defaultSnsName ?? this.getRoomSnsName(''));
+                            const arn = this.constructTopicArn(snsName);
+                            debug('Publishing message for room', room, 'arn', arn, envelope);
+                            await this.snsClient.publish({
+                                TopicArn: arn,
+                                Message: JSON.stringify(envelope),
+                                MessageAttributes: {
+                                    ['test']: {DataType: 'String', StringValue: 'asdf'}
+                                },
+                            });
+                        } catch (e) {
+                            if (e.Code !== 'NotFound') throw e;
+                            console.warn('Room does not exist but tried to send to it', room);
                         }
-                    })]);
-                })().then(callback);
+                    }
+                })]);
             } else {
                 const rooms = opts.rooms;
                 const except = opts.except ?? new Set();
@@ -388,9 +373,9 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
 
                         for (const id of this._rooms.get(room)!) {
                             if (ids.has(id) || except.has(id)) continue;
-                            const socket = this.nsp.connected[id];
+                            const socket = this.nsp.sockets.get(id);
                             if (socket) {
-                                socket.packet(packet, packetOpts);
+                                (socket as unknown as SocketWithPacketOnly).packet(packet, packetOpts);
                                 ids.add(id);
                             }
                         }
@@ -398,12 +383,10 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                 } else {
                     for (const [id] of this._sids) {
                         if (except.has(id)) continue;
-                        const socket = this.nsp.connected[id];
-                        if (socket) socket.packet(packet, packetOpts);
+                        const socket = this.nsp.sockets.get(id);
+                        if (socket) (socket as unknown as SocketWithPacketOnly).packet(packet, packetOpts);
                     }
                 }
-
-                callback?.();
             }
         }
         sockets(rooms: Set<Room>, callback?: (sockets: Set<SocketId>) => void): Promise<Set<SocketId>> {
@@ -414,14 +397,14 @@ export function SqsSocketIoAdapterFactory(options: SqsSocketIoAdapterOptions): A
                     if (!this._rooms.has(room)) continue;
 
                     for (const id of this._rooms.get(room)!) {
-                        if (id in this.nsp.connected) {
+                        if (id in this.nsp.sockets) {
                             sids.add(id);
                         }
                     }
                 }
             } else {
                 for (const [id] of this._sids) {
-                    if (id in this.nsp.connected) sids.add(id);
+                    if (id in this.nsp.sockets) sids.add(id);
                 }
             }
 

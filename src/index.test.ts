@@ -3,8 +3,8 @@
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 require('source-map-support').install();
 
-import {SqsSocketIoAdapterFactory, SqsSocketIoAdapterOptions} from '.';
-import io from 'socket.io';
+import {SidRoomRouting, SqsSocketIoAdapterFactory, SqsSocketIoAdapterOptions} from '.';
+import io, { Socket } from 'socket.io';
 import ioclient from 'socket.io-client';
 import { randomString, delay } from './util';
 import getPort from 'get-port';
@@ -29,6 +29,7 @@ beforeEach(() => {
             },
             sqsClient: {region: 'us-east-1'},
             region: 'us-east-1',
+            sidRoomRouting: SidRoomRouting.local,
             shutdownCallbackCallback: cb => shutdownCallback = cb,
             readyCallback: res
         };
@@ -38,7 +39,7 @@ beforeEach(() => {
 });
 
 let socket: io.Server;
-let client: SocketIOClient.Socket;
+let client: ioclient.Socket;
 
 afterEach(async () => {
     const closePromise = new Promise(res => socket?.close(res));
@@ -49,13 +50,13 @@ afterEach(async () => {
 
 it('should forward a room-based message', async () => {
     const port = await getPort({});
-    socket = io(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
-    socket.on('connect', async clientsock => {
-        await new Promise((res, rej) => clientsock.join('newroom', err => err ? rej(err) : res()));
+    socket = new io.Server(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
+    socket.on('connect', async (clientsock: Socket) => {
+        await clientsock.join('newroom');
         socket.to('newroom').emit('testevent', 'asdf');
     });
     await readyPromise;
-    client = ioclient(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
+    client = ioclient.io(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
     const promise = new Promise((res, rej) => client.on('testevent', (value: string) => res(value)));
     await promise;
     const res = await promise;
@@ -64,12 +65,12 @@ it('should forward a room-based message', async () => {
 
 it('should forward a non-room message', async () => {
     const port = await getPort({});
-    socket = io(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
-    socket.on('connect', async clientsock => {
+    socket = new io.Server(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
+    socket.on('connect', async (clientsock: Socket) => {
         socket.emit('testevent', 'asdf');
     });
     await readyPromise;
-    client = ioclient(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
+    client = ioclient.io(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
     const promise = new Promise((res, rej) => client.on('testevent', (value: string) => res(value)));
     await promise;
     const res = await promise;
@@ -78,12 +79,12 @@ it('should forward a non-room message', async () => {
 
 it('should forward a direct-to-sid message', async () => {
     const port = await getPort({});
-    socket = io(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
+    socket = new io.Server(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
     socket.on('connect', async clientsock => {
         clientsock.emit('testevent', 'asdf');
     });
     await readyPromise;
-    client = ioclient(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
+    client = ioclient.io(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
     const promise = new Promise((res, rej) => client.on('testevent', (value: string) => res(value)));
     const res = await promise;
     expect(res).toBe('asdf');
@@ -92,7 +93,7 @@ it('should forward a direct-to-sid message', async () => {
 // todo: this needs to be implemented
 // it('should forward a binary message', async () => {
 //     const port = await getPort({});
-//     socket = io(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
+//     socket = new io.Server(port, { adapter: SqsSocketIoAdapterFactory(options) as any });
 //     const sourceArr = [1, 234, -19];
 //     const payload = {
 //         stringPart: 'asdf',
@@ -102,7 +103,7 @@ it('should forward a direct-to-sid message', async () => {
 //         socket.emit('testbinevent', payload);
 //     });
 //     await readyPromise;
-//     client = ioclient(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
+//     client = ioclient.io(`http://localhost:${port}`, {autoConnect: true, transports: ['websocket']});
 //     const promise = new Promise((res, rej) => client.on('testbinevent', (value: string) => res(value)));
 //     const res = await promise;
 //     expect(res).toEqual(payload);
