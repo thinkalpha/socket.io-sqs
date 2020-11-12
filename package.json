@@ -21,6 +21,8 @@
   "homepage": "https://github.com/thinkalpha/socket.io-sqs#readme",
   "devDependencies": {
     "@types/async-lock": "^1.1.2",
+    "@types/cookie": "^0.4.0",
+    "@types/cors": "^2.8.8",
     "@types/debug": "^4.1.5",
     "@types/get-port": "^4.2.0",
     "@types/jest": "^26.0.14",
