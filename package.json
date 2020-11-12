@@ -1,6 +1,6 @@
 {
   "name": "socket.io-sqs",
-  "version": "2.0.0-dev.1",
+  "version": "2.0.0-dev.2",
   "description": "A socket.io adapter for SQS/SNS",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
