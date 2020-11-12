@@ -4,7 +4,6 @@ import {CreateTopicCommand, SNS, SNSClient, SNSClientConfig} from '@aws-sdk/clie
 import {SQS, SQSClient, SQSClientConfig} from '@aws-sdk/client-sqs';
 import {Namespace, Socket} from 'socket.io';
 import { EventEmitter } from 'events';
-import asyncLock from 'async-lock';
 import { Message, CreateQueueRequest } from '@aws-sdk/client-sqs/types/models';
 import {mapIter} from './util';
 import { CreateTopicInput, CreateTopicResponse } from '@aws-sdk/client-sns/types/models';
